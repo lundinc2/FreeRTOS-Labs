@@ -47,9 +47,11 @@ extern void prvStart( CK_SESSION_HANDLE * pxSession, CK_SLOT_ID ** ppxSlotId );
 extern void prvEnd( CK_SESSION_HANDLE xSession, CK_SLOT_ID * pxSlotId );
 
 /** 
- * prvObjectImporting covers how to create a public and private key pair. 
+ * prvObjectGeneration covers how to create a public key and private key pair
+ * with Cryptoki defined attributes using C_GenerateKeyPair.
+ *
  */
-static void prvObjectImporting( void );
+static void prvObjectGeneration( void );
 
 /** 
  * prvObjectImporting covers how to import a private and public key that were 
@@ -58,7 +60,7 @@ static void prvObjectImporting( void );
  * Note: The "sign-verify.c" demo has a dependency on the objects created
  * in this function, and will not work without first running this function.
  */
-static void prvObjectGeneration( void );
+static void prvObjectImporting( void );
 
 /**
  * This function details how to use the PKCS #11 "Object" functions to 
@@ -74,7 +76,10 @@ static void prvObjectGeneration( void );
 void vPKCS11ObjectDemo( void )
 {
     configPRINTF( ( "\r\nStarting PKCS #11 Objects Demo.\r\n" ) );
-    /* TODO define objects. */
+    /* PKCS #11 defines objects as "An item that is stored on a token. May be 
+     * data, a certificate, or a key." This demo will show how to create objects
+     * that are managed by Cryptoki. */
+    prvObjectGeneration();
     prvObjectImporting();
     configPRINTF( ( "\r\nFinished PKCS #11 Objects Demo.\r\n" ) );
 }
@@ -82,13 +87,17 @@ void vPKCS11ObjectDemo( void )
 static void prvObjectGeneration()
 {
     configPRINTF( ( "---------Generating Objects---------\r\n" ) );
+
     /* Helper variables. */
     CK_RV xResult = CKR_OK;
     CK_SESSION_HANDLE hSession = CK_INVALID_HANDLE;
     CK_SLOT_ID * pxSlotId = 0;
     CK_FUNCTION_LIST_PTR pxFunctionList = NULL;
+    CK_BYTE * pxDerPublicKey = NULL;
+    CK_ULONG ulDerPublicKeyLength = 0;
+    CK_BBOOL xTrue = CK_TRUE;
 
-    /* Specify the mechanism to use in the keypair generation. Mechanisms are
+    /* Specify the mechanism to use in the key pair generation. Mechanisms are
      * previously explained in the "mechanims_and_digests.c" demo. */
     CK_MECHANISM xMechanism =
     {
@@ -99,26 +108,46 @@ static void prvObjectGeneration()
      * For further explanations of EC Cryptography please see the following:
      * https://en.wikipedia.org/wiki/Elliptic-curve_cryptography
      * https://wiki.openssl.org/index.php/Elliptic_Curve_Cryptography
-     *
-     *
-     * */
+     */
     CK_BYTE xEcParams[] = pkcs11DER_ENCODED_OID_P256; 
+
+    /* Specify the key type to be EC. */
     CK_KEY_TYPE xKeyType = CKK_EC;
+
+    /* Object handles are a token specific identifier for an object. They are 
+     * used so the application's sessions can specify which object to interact
+     * with. Non-zero values are valid, 0 is always invalid, and is defined as
+     * CK_INVALID_HANDLE 
+     *
+     * The lifetime of the handle is not necessarily the same as the lifetime of
+     * the object.
+     */
     CK_OBJECT_HANDLE xPrivateKeyHandle = CK_INVALID_HANDLE;
     CK_OBJECT_HANDLE xPublicKeyHandle = CK_INVALID_HANDLE;
-    CK_BYTE * pxDerPublicKey = NULL;
-    CK_ULONG ulDerPublicKeyLength = 0;
 
-    CK_BYTE pucPublicKeyLabel[] = pkcs11configLABEL_DEVICE_PRIVATE_KEY_FOR_TLS;
-    CK_BYTE pucPrivateKeyLabel[] = pkcs11configLABEL_DEVICE_PUBLIC_KEY_FOR_TLS;
 
-    CK_BBOOL xTrue = CK_TRUE;
+    /* Labels are application defined strings that are used to identify an 
+     * object. It should not be NULL terminated. */
+    CK_BYTE pucPublicKeyLabel[] = { pkcs11configLABEL_DEVICE_PRIVATE_KEY_FOR_TLS };
+    CK_BYTE pucPrivateKeyLabel[] = { pkcs11configLABEL_DEVICE_PUBLIC_KEY_FOR_TLS };
+
+    /* CK_ATTTRIBUTE's contain an attribute type, a value, and the length of 
+     * the value. An array of CK_ATTRIBUTEs is called a template. They are used
+     * for creating, searching, and manipulating for objects. The order of the 
+     * template does not matter.
+     *
+     * In the below template we are creating a public key: 
+     *      Specify the key type as EC.
+     *      The key will be able to verify a message. 
+     *      Specify the EC Curve.
+     *      Assign a label to the object that will be created.
+     */
     CK_ATTRIBUTE xPublicKeyTemplate[] =
     {
-        { CKA_KEY_TYPE,  NULL /* &xKeyType */, sizeof( xKeyType )          },
-        { CKA_VERIFY,    NULL /* &xTrue */,    sizeof( xTrue )             },
-        { CKA_EC_PARAMS, NULL /* xEcParams */, sizeof( xEcParams )         },
-        { CKA_LABEL,     pucPublicKeyLabel,    sizeof( pucPublicKeyLabel ) }
+        { CKA_KEY_TYPE,  NULL /* &xKeyType */, sizeof( xKeyType )              },
+        { CKA_VERIFY,    NULL /* &xTrue */,    sizeof( xTrue )                 },
+        { CKA_EC_PARAMS, NULL /* xEcParams */, sizeof( xEcParams )             },
+        { CKA_LABEL,     pucPublicKeyLabel,    sizeof( pucPublicKeyLabel ) - 1 }
     };
 
     /* Aggregate initializers must not use the address of an automatic variable. */
@@ -127,13 +156,20 @@ static void prvObjectGeneration()
     xPublicKeyTemplate[ 1 ].pValue = &xTrue;
     xPublicKeyTemplate[ 2 ].pValue = &xEcParams;
 
+    /* In the below template we are creating a private key: 
+     *      The key type is EC.
+     *      The key is a token object.
+     *      The key will be a private key.
+     *      The key will be able to sign messages. 
+     *      Assign a label to the object that will be created.
+     */
     CK_ATTRIBUTE xPrivateKeyTemplate[] =
     {
-        { CKA_KEY_TYPE, NULL /* &xKeyType */, sizeof( xKeyType )                            },
-        { CKA_TOKEN,    NULL /* &xTrue */,    sizeof( xTrue )                               },
-        { CKA_PRIVATE,  NULL /* &xTrue */,    sizeof( xTrue )                               },
-        { CKA_SIGN,     NULL /* &xTrue */,    sizeof( xTrue )                               },
-        { CKA_LABEL,    pucPrivateKeyLabel,   sizeof( pucPrivateKeyLabel ) }
+        { CKA_KEY_TYPE, NULL /* &xKeyType */, sizeof( xKeyType )               },
+        { CKA_TOKEN,    NULL /* &xTrue */,    sizeof( xTrue )                  },
+        { CKA_PRIVATE,  NULL /* &xTrue */,    sizeof( xTrue )                  },
+        { CKA_SIGN,     NULL /* &xTrue */,    sizeof( xTrue )                  },
+        { CKA_LABEL,    pucPrivateKeyLabel,   sizeof( pucPrivateKeyLabel ) - 1 }
     };
 
     /* Aggregate initializers must not use the address of an automatic variable. */
@@ -152,6 +188,7 @@ static void prvObjectGeneration()
                 pkcs11configLABEL_DEVICE_PRIVATE_KEY_FOR_TLS ) );
     configPRINTF( ( "Creating public key with label %s \r\n", 
                 pkcs11configLABEL_DEVICE_PUBLIC_KEY_FOR_TLS ) );
+
     xResult = pxFunctionList->C_GenerateKeyPair( hSession,
                                                  &xMechanism,
                                                  xPublicKeyTemplate,
@@ -165,6 +202,8 @@ static void prvObjectGeneration()
                 " Solution directory\r\n" ) );
     configPRINTF( ( "Extracting public key bytes...\r\n" ) );
 
+    /* Export public key as hex bytes and print the hex representation of the 
+     * public key. */
     vExportPublicKey( hSession, 
             xPublicKeyHandle, 
             &pxDerPublicKey, 
