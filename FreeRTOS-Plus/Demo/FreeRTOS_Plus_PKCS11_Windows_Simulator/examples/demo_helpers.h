@@ -22,25 +22,29 @@
  * http://aws.amazon.com/freertos
  * http://www.FreeRTOS.org
  */
+#ifndef _DEMO_HELPER_FUNCTIONS_
+#define _DEMO_HELPER_FUNCTIONS_
 
-/*
- * @brief this macro defines the stack size for the PKCS #11 demo task.
- */
-#define configPKCS11_DEMO_STACK_SIZE                200
+#include "mbedtls/pk.h"
 
-/*
- * @brief set this macro to "1" in order to run the PKCS #11 management and
- * random number generator demo.
- */
-#define configPKCS11_MANAGEMENT_AND_RNG_DEMO        1
+void vStart( CK_SESSION_HANDLE * pxSession,
+               CK_SLOT_ID ** ppxSlotId );
+/*-----------------------------------------------------------*/
 
-/*
- * @brief set this macro to "1" in order to run the PKCS #11 mechanisms and
- * digest demo.
- */
-#define configPKCS11_MECHANISMS_AND_DIGESTS_DEMO    1
+void vEnd( CK_SESSION_HANDLE xSession,
+             CK_SLOT_ID * pxSlotId );
+/*-----------------------------------------------------------*/
 
-/*
- * @brief set this macro to "1" in order to run the PKCS #11 object demo.
- */
-#define configPKCS11_OBJECT_DEMO                    1
+void vWriteHexBytesToConsole( char * pcDescription,
+                              CK_BYTE * pucData,
+                              CK_ULONG ulDataLength );
+/*-----------------------------------------------------------*/
+
+/* Extract ECDSA public key. */  
+CK_RV vExportPublicKey( CK_SESSION_HANDLE xSession,
+                        CK_OBJECT_HANDLE xPublicKeyHandle,
+                        CK_BYTE ** ppucDerPublicKey,
+                        CK_ULONG * pulDerPublicKeyLength );
+/*-----------------------------------------------------------*/
+#endif /* _DEMO_HELPER_FUNCTIONS_ */
+

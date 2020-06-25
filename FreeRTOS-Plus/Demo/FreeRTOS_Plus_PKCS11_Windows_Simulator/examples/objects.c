@@ -26,7 +26,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
-/* Standard includes. */
+/* Standard include. */
 #include "stdio.h"
 
 /* PKCS #11 includes. */
@@ -34,17 +34,15 @@
 #include "iot_pkcs11.h"
 #include "pkcs11.h"
 
-/* This function contains standard setup code for PKCS #11. See the 
- * "management_and_rng.c" file for the demo code explaining this section
- * of cryptoki.
- */
-extern void prvStart( CK_SESSION_HANDLE * pxSession, CK_SLOT_ID ** ppxSlotId );
+/* mbed TLS includes. */
+#include "mbedtls/pk.h"
 
-/* This function contains standard tear down code for PKCS #11. See the 
- * "management_and_rng.c" file for the demo code explaining this section
- * of cryptoki.
- */
-extern void prvEnd( CK_SESSION_HANDLE xSession, CK_SLOT_ID * pxSlotId );
+/* RSA Credential include. */
+#include "demo_credentials.h"
+
+/* Demo includes. */
+#include "demo_helpers.h"
+#include "pkcs11_demos.h"
 
 /** 
  * prvObjectGeneration covers how to create a public key and private key pair
@@ -61,6 +59,30 @@ static void prvObjectGeneration( void );
  * in this function, and will not work without first running this function.
  */
 static void prvObjectImporting( void );
+
+/** 
+ * prvPrivateKeyImporting is a child function of prvObjectImporting which covers 
+ * how to import a private RSA key from a PEM string using mbed TLS. 
+ *
+ */
+static void prvPrivateKeyImporting( void );
+
+/** 
+ * prvCertificateImporting is a child function of prvObjectImporting which covers 
+ * how to import an RSA certificate from a PEM string using mbed TLS. 
+ *
+ */
+static void prvCertificateImporting( void );
+
+/* Length parameters for importing RSA-2048 private keys. */
+#define MODULUS_LENGTH        pkcs11RSA_2048_MODULUS_BITS / 8
+#define E_LENGTH              3
+#define D_LENGTH              pkcs11RSA_2048_MODULUS_BITS / 8
+#define PRIME_1_LENGTH        128
+#define PRIME_2_LENGTH        128
+#define EXPONENT_1_LENGTH     128
+#define EXPONENT_2_LENGTH     128
+#define COEFFICIENT_LENGTH    128
 
 /**
  * This function details how to use the PKCS #11 "Object" functions to 
@@ -165,21 +187,14 @@ static void prvObjectGeneration()
      */
     CK_ATTRIBUTE xPrivateKeyTemplate[] =
     {
-        { CKA_KEY_TYPE, NULL /* &xKeyType */, sizeof( xKeyType )               },
-        { CKA_TOKEN,    NULL /* &xTrue */,    sizeof( xTrue )                  },
-        { CKA_PRIVATE,  NULL /* &xTrue */,    sizeof( xTrue )                  },
-        { CKA_SIGN,     NULL /* &xTrue */,    sizeof( xTrue )                  },
+        { CKA_KEY_TYPE, &xKeyType, sizeof( xKeyType )               },
+        { CKA_TOKEN,    &xTrue,    sizeof( xTrue )                  },
+        { CKA_PRIVATE,  &xTrue,    sizeof( xTrue )                  },
+        { CKA_SIGN,     &xTrue,    sizeof( xTrue )                  },
         { CKA_LABEL,    pucPrivateKeyLabel,   sizeof( pucPrivateKeyLabel ) - 1 }
     };
 
-    /* Aggregate initializers must not use the address of an automatic variable. */
-    /* See MSVC Compiler Warning C4221 */
-    xPrivateKeyTemplate[ 0 ].pValue = &xKeyType;
-    xPrivateKeyTemplate[ 1 ].pValue = &xTrue;
-    xPrivateKeyTemplate[ 2 ].pValue = &xTrue;
-    xPrivateKeyTemplate[ 3 ].pValue = &xTrue;
-
-    prvStart( &hSession, &pxSlotId ); 
+    vStart( &hSession, &pxSlotId ); 
 
     xResult = C_GetFunctionList( &pxFunctionList );
     configASSERT( xResult == CKR_OK );
@@ -212,11 +227,151 @@ static void prvObjectGeneration()
             pxDerPublicKey, 
             ulDerPublicKeyLength );
     configPRINTF( ( "---------Generating Objects---------\r\n" ) );
+    vEnd( hSession, pxSlotId ); 
 }
     
 static void prvObjectImporting()
 {
     configPRINTF( ( "---------Importing Objects---------\r\n" ) );
+    prvPrivateKeyImporting();
+    prvCertificateImporting();
     configPRINTF( ( "---------Finished Importing Objects---------\r\n" ) );
+
 }
+
+static void prvPrivateKeyImporting( void )
+{
+    configPRINTF( ( "Importing RSA Private Key...\r\n" ) );
+
+    /* Helper variables and variables that have been covered. */
+    CK_RV xResult = CKR_OK;
+    CK_SESSION_HANDLE hSession = CK_INVALID_HANDLE;
+    CK_SLOT_ID * pxSlotId = 0;
+    CK_FUNCTION_LIST_PTR pxFunctionList = NULL;
+    CK_BBOOL xTrue = CK_TRUE;
+    CK_KEY_TYPE xPrivateKeyType = CKK_RSA;
+    CK_OBJECT_CLASS xPrivateKeyClass = CKO_PRIVATE_KEY;
+    CK_BYTE pxLabel[] = pkcs11configLABEL_DEVICE_PRIVATE_KEY_FOR_TLS;
+    CK_OBJECT_HANDLE xPrivateKeyHandle = CK_INVALID_HANDLE;
+
+    /* mbed TLS variables. */
+    int lMbedResult = 0;
+    mbedtls_pk_context xMbedPkContext = { 0 };
+    mbedtls_rsa_context * pxRsaContext = NULL;
+
+    /* Initialize mbed TLS context. */
+    mbedtls_pk_init( &xMbedPkContext );
+
+    vStart( &hSession, &pxSlotId ); 
+
+    /* Ensure the Cryptoki library has the necessary functions implemented. */
+    xResult = C_GetFunctionList( &pxFunctionList );
+    configASSERT( xResult == CKR_OK );
+    configASSERT( pxFunctionList->C_CreateObject  != NULL );
+
+    /* Byte arrays of the various parameters for an RSA private key. This code
+     * will be importing a 2048 bit RSA key, and the sizes are hard coded for 
+     * that value.
+     *
+     * For further explanation of these variables see:
+     * https://en.wikipedia.org/wiki/RSA_(cryptosystem)
+     *
+     */
+    CK_BYTE modulus[ MODULUS_LENGTH + 1 ] = { 0 };
+    CK_BYTE e[ E_LENGTH + 1 ] = { 0 };
+    CK_BYTE d[ D_LENGTH + 1 ] = { 0 };
+    CK_BYTE prime1[ PRIME_1_LENGTH + 1 ] = { 0 };
+    CK_BYTE prime2[ PRIME_2_LENGTH + 1 ] = { 0 };
+    CK_BYTE exponent1[ EXPONENT_1_LENGTH + 1 ] = { 0 };
+    CK_BYTE exponent2[ EXPONENT_2_LENGTH + 1 ] = { 0 };
+    CK_BYTE coefficient[ COEFFICIENT_LENGTH + 1 ] = { 0 };
+
+    /* Parse the RSA PEM string using mbed tls. See the mbed TLS documentation,
+     * or pk.h for further explanation of this API. */
+    lMbedResult = mbedtls_pk_parse_key( &xMbedPkContext, 
+            ( const unsigned char * ) pkcs11demo_RSA_PRIVATE_KEY, 
+            strlen( pkcs11demo_RSA_PRIVATE_KEY ) + 1 , 
+            NULL, 
+            0 );
+    configASSERT( lMbedResult == 0 );
+
+
+
+    /* Export the RSA private key parameters into raw bytes. */
+    pxRsaContext = xMbedPkContext.pk_ctx;
+    lMbedResult = mbedtls_rsa_export_raw( pxRsaContext,
+                                          modulus, MODULUS_LENGTH + 1,
+                                          prime1, PRIME_1_LENGTH + 1,
+                                          prime2, PRIME_2_LENGTH + 1,
+                                          d, D_LENGTH + 1,
+                                          e, E_LENGTH + 1 );
+    configASSERT( lMbedResult == 0 );
+
+    /* Export Exponent 1, Exponent 2, Coefficient. */
+    lMbedResult = mbedtls_mpi_write_binary( ( mbedtls_mpi const * ) &pxRsaContext->DP, 
+            exponent1, 
+            EXPONENT_1_LENGTH + 1 );
+    configASSERT( lMbedResult == 0 );
+
+    lMbedResult = mbedtls_mpi_write_binary( ( mbedtls_mpi const * ) &pxRsaContext->DQ, 
+            exponent2, 
+            EXPONENT_2_LENGTH + 1 );
+    configASSERT( lMbedResult == 0 );
+
+    lMbedResult = mbedtls_mpi_write_binary( ( mbedtls_mpi const * ) &pxRsaContext->QP, 
+            coefficient, 
+            COEFFICIENT_LENGTH + 1 );
+    configASSERT( lMbedResult == 0 );
+
+    /* 
+     * Now we have created a template of CK_ATTRIBUTEs that describe the structure
+     * of the RSA private key we want to create. We will pass this to the Cryptoki
+     * library, as well as it's length, to create the described private key on
+     * the token.
+     *
+     * The pointers to the various RSA parameters are incremented by one, in 
+     * order to remove the 0 padding if it was added since we use the original 
+     * length of the RSA parameter. 
+     *
+     */
+    CK_ATTRIBUTE xPrivateKeyTemplate[] =
+    {
+        { CKA_CLASS,            &xPrivateKeyClass, sizeof( CK_OBJECT_CLASS ) },
+        { CKA_KEY_TYPE,         &xPrivateKeyType,  sizeof( CK_KEY_TYPE )     },
+        { CKA_LABEL,            pxLabel,           sizeof(  pxLabel )        },
+        { CKA_TOKEN,            &xTrue,            sizeof( CK_BBOOL )        },
+        { CKA_SIGN,             &xTrue,            sizeof( CK_BBOOL )        },
+        { CKA_MODULUS,          modulus + 1,       MODULUS_LENGTH            },
+        { CKA_PRIVATE_EXPONENT, d + 1,             D_LENGTH                  },
+        { CKA_PUBLIC_EXPONENT,  e + 1,             E_LENGTH                  },
+        { CKA_PRIME_1,          prime1 + 1,        PRIME_1_LENGTH            },
+        { CKA_PRIME_2,          prime2 + 1,        PRIME_2_LENGTH            },
+        { CKA_EXPONENT_1,       exponent1 + 1,     EXPONENT_1_LENGTH         },
+        { CKA_EXPONENT_2,       exponent2 + 1,     EXPONENT_2_LENGTH         },
+        { CKA_COEFFICIENT,      coefficient + 1,   COEFFICIENT_LENGTH        }
+    };
     
+    /* Once the Cryptoki library has finished importing the new RSA private key
+     * a CK_OBJECT_HANDLE is associated with it. The application can now use this
+     * to refer to the object in following operations.
+     *
+     * xPrivateKeyHandle in the below example will have it's value modified to 
+     * be the CK_OBJECT_HANDLE. 
+     *
+     */
+    xResult = pxFunctionList->C_CreateObject( hSession,
+                                          ( CK_ATTRIBUTE_PTR ) &xPrivateKeyTemplate,
+                                          sizeof( xPrivateKeyTemplate ) / sizeof( CK_ATTRIBUTE ),
+                                          &xPrivateKeyHandle );
+    configASSERT( xResult == CKR_OK );
+    configASSERT( xPrivateKeyHandle  != CK_INVALID_HANDLE );
+    
+    /* Clean up mbed TLS context that was used to parse the RSA key. */
+    mbedtls_pk_free( &xMbedPkContext );
+
+    vEnd( hSession, pxSlotId ); 
+    configPRINTF( ( "Finished Importing RSA Private Key.\r\n" ) );
+}
+static void prvCertificateImporting( void )
+{
+}
