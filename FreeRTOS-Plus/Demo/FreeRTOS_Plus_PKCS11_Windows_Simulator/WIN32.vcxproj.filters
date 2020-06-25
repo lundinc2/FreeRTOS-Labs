@@ -634,9 +634,6 @@
       <Filter>3rdparty\mbedtls_utils</Filter>
     </ClInclude>
     <ClInclude Include="pkcs11_demo_config.h" />
-    <ClInclude Include="examples\demo_credentials.h">
-      <Filter>examples</Filter>
-    </ClInclude>
     <ClInclude Include="examples\pkcs11_demos.h">
       <Filter>examples</Filter>
     </ClInclude>

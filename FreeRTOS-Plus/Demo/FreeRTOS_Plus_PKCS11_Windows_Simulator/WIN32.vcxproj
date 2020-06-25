@@ -341,7 +341,6 @@
     <ClInclude Include="..\..\Source\FreeRTOS-Plus-PKCS11\include\threading_alt.h" />
     <ClInclude Include="aws_mbedtls_config.h" />
     <ClInclude Include="examples\demo_helpers.h" />
-    <ClInclude Include="examples\demo_credentials.h" />
     <ClInclude Include="examples\pkcs11_demos.h" />
     <ClInclude Include="FreeRTOSConfig.h" />
     <ClInclude Include="pkcs11_demo_config.h" />
